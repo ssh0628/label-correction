@@ -1,0 +1,131 @@
+{
+  "seed": 0,
+  "data": {
+    "root": "/root/project/dataset/npy_path/consensus/sqrt/modify_same_as_orig",
+    "image_root": null,
+    "annotation_root": null,
+    "name": "a1-a7-multi-roi-sqrt",
+    "class_names": [
+      "A1",
+      "A2",
+      "A3",
+      "A4",
+      "A5",
+      "A6",
+      "A7"
+    ],
+    "train": {
+      "paths": "train_path.npy",
+      "labels": "train_labels.npy",
+      "bboxes": null
+    },
+    "validation": {
+      "paths": "val_path.npy",
+      "labels": "val_labels.npy",
+      "bboxes": null
+    },
+    "test": {
+      "paths": "test_path.npy",
+      "labels": "test_labels.npy",
+      "bboxes": null
+    },
+    "label_offset": 0,
+    "crop_bbox": true,
+    "multi_roi": true,
+    "crop_method": "aspect_letterbox",
+    "roi_scales": [
+      0.8,
+      1,
+      1.2
+    ],
+    "roi_shift_ratio": 0.15,
+    "missing_bbox": "drop",
+    "image_size": 224,
+    "bbox_workers": 16,
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "allow_truncated_images": true,
+    "verify_images": false,
+    "image_check_workers": 8
+  },
+  "augmentation": {
+    "horizontal_flip": 0.5,
+    "vertical_flip": 0.5,
+    "weak_rotation": 10,
+    "strong_rotation": 15,
+    "color_jitter": [
+      0.1,
+      0.1,
+      0.05,
+      0.02
+    ]
+  },
+  "model": {
+    "name": "convnextv2_tiny",
+    "pretrained": true,
+    "pretrained_weights": null,
+    "drop_path_rate": 0.2
+  },
+  "training": {
+    "epochs": 200,
+    "batch_size": 256,
+    "eval_batch_size": 512,
+    "learning_rate": 0.001,
+    "encoder_learning_rate": 0.00003,
+    "optimizer": "adamw",
+    "momentum": 0.9,
+    "weight_decay": 0.1,
+    "amp": true,
+    "channels_last": true,
+    "num_workers": 16,
+    "eval_num_workers": 16,
+    "prefetch_factor": 2,
+    "log_interval": 20,
+    "finetune_lr_ratio": 0.1,
+    "student_min_lr_ratio": 0.001
+  },
+  "correction": {
+    "model_class_weighting": "inverse_sqrt",
+    "model_seeds": [
+      0,
+      1
+    ],
+    "forget_rate": 0.1,
+    "num_gradual": 10,
+    "warmup_epochs": 10,
+    "correction_end_epoch": 150,
+    "alpha": 0.2,
+    "beta": 0.1,
+    "label_lr": 500,
+    "label_lr_reference_batch_size": 256,
+    "scale_label_lr_with_batch": true,
+    "initial_label_logit": 10,
+    "loss_variant": "official",
+    "curriculum_groups": 3,
+    "pca_dimensions": 128,
+    "density_percentile": 60,
+    "curriculum_chunk_size": 512
+  },
+  "runtime": {
+    "output_root": "../output/co",
+    "name": "a1-a7-co-correcting-alpha02-lambda500-seeds01",
+    "device": "auto",
+    "deterministic": false
+  },
+  "pipeline": {
+    "student_epochs": 300,
+    "student_batch_size": 256,
+    "evaluate_27_views": true,
+    "evaluation_image_batch_size": 16,
+    "evaluation_view_chunk_size": 128,
+    "holdout_threshold": 0.7
+  }
+}

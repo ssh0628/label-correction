@@ -1,0 +1,48 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+.DS_Store
+build/
+dist/
+wheels/
+*.egg-info
+
+# Test, type-checker, and coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+
+# Local editor and environment files
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+
+# Local datasets and experiment artifacts
+/experiment_folder/
+data/
+dataset/
+test/
+tests/
+output/
+outputs/
+results/
+.archive/
+.cache/
+# Legacy pixel caches; no longer generated
+image_cache/
+*.log
+*.jsonl
+*.csv
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz

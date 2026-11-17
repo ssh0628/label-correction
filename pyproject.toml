@@ -1,0 +1,18 @@
+[project]
+name = "label-correction"
+version = "0.1.0"
+description = "SSR/LSL and Co-Correcting training, label correction, and Multi-ROI WCE retraining"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26,<2.0",
+    "pillow>=10.0",
+    "scipy>=1.11",
+    "timm>=1.0.15",
+    "torch>=2.5",
+    "torchvision>=0.20",
+    "tqdm>=4.66",
+]
+
+[tool.uv]
+package = false
