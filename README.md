@@ -4,7 +4,7 @@
 - 라벨 교정: **SSR+LSL**, **Co-Correcting**.
 - Backbone: 사전학습 **ConvNeXt V2 Tiny**.
 - 영상 분류: **Multi-ROI + Aspect Letterbox**, 재학습 손실: **Weighted Cross-Entropy(WCE)**.
-- 데이터·모델 가중치·실험 결과 파일은 저장소에 포함하지 않음. 아래 표는 로컬 실험 기록을 요약한 결과.
+- 데이터·모델 가중치·실험 결과 파일은 저장소에 포함하지 않음. 아래 표는 로컬 실험 기록과 별도로 제공된 클라우드 실험 정보를 정리한 결과.
 
 ## 실험 기준
 
@@ -14,6 +14,7 @@
 | SSR+LSL Teacher | SSR+LSL로 학습 | 원본 Val Macro F1 최고 | 원본 |
 | Co-Correcting Teacher | Co-Correcting으로 학습 | Fine-tuning 종료 모델 | 원본 |
 | SSR+LSL Student | SSR 교정 | SSR 교정 Val Macro F1 최고 | SSR 교정 |
+| Co-Correcting Student | Co 교정 | Co 교정 Val Macro F1 최고 | Co 교정 |
 
 - 학습·검증·테스트 **전체 분할의 라벨을 교정**하고, 영상과 데이터 분할은 유지.
 - Student는 Teacher의 교정 라벨을 고정하고 사전학습 가중치에서 새롭게 학습.
@@ -34,18 +35,12 @@
 | SSR+LSL Teacher | 원본 | 75.3646 | 77.8468 | 76.6055 | 264 |
 | SSR+LSL Student · Multi-ROI + WCE | SSR 교정 | 86.4598 | 87.5680 | 87.7218 | 205 |
 | Co-Correcting Teacher | 원본 | 76.1367 | 78.8594 | 77.5565 | 200 |
-
-- SSR Teacher 27-ROI 수치는 제공된 평가 로그를 반영. 로컬 center 결과·epoch·Val 선택 점수와 대조했으며, 원본 27-ROI 평가 파일은 로컬에 없음.
-- 라벨 생성 모델은 분류 결과의 선택 모델과 구분: **SSR은 Train total loss 최저 epoch 267**, **Co는 correction_end epoch 150**.
-
-### Co Student 참고 측정
-
-| 모델 | Test 라벨 | Accuracy | Balanced Accuracy | Macro F1 | 선택 epoch |
-|---|---|---:|---:|---:|---:|
 | Co-Correcting Student · Multi-ROI + WCE | Co 교정 | 87.9325 | 87.8881 | 88.2354 | 222 |
 
-- 교정 Train으로 학습하고 교정 Test로 평가한 기존 실행의 측정값.
-- SSR Student와 모델 선택 조건이 다른 실행이므로 참고 결과로 구분.
+- 두 Student 모두 각 방법의 교정 Val Macro F1을 기준으로 모델 선택.
+- Co Student의 모델 선택 기준과 측정값은 별도로 수행한 클라우드 실험에 대해 제공된 정보를 반영.
+- SSR Teacher 27-ROI 수치는 제공된 평가 로그를 반영. 로컬 center 결과·epoch·Val 선택 점수와 대조했으며, 원본 27-ROI 평가 파일은 로컬에 없음.
+- 라벨 생성 모델은 분류 결과의 선택 모델과 구분: **SSR은 Train total loss 최저 epoch 267**, **Co는 correction_end epoch 150**.
 
 ## 데이터셋
 
@@ -141,7 +136,7 @@
 - 원본·교정 라벨 신뢰도: Baseline 및 Teacher의 `label_quality.json`.
 - 기존 라벨 재사용 시 세 분할의 교정 파일과 Teacher 출처가 모두 일치해야 함.
 - `tests/`, `test/`, `output/`, 데이터·가중치·로그·캐시·보관본은 `.gitignore`로 제외.
-- 결과 표 출처: 로컬 평가 JSON, 교정 보고서, 신뢰도 지표 기록. Co Student는 `.archive/`에 보관한 기존 실행 기록 기준.
+- 결과 표 출처: 로컬 평가 JSON·교정 보고서·신뢰도 지표 기록 및 별도로 제공된 클라우드 실험 정보.
 
 ## References
 
