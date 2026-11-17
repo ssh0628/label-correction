@@ -8,7 +8,7 @@
 
 ## Experiment
 
-| Model | Label | Model selection |
+| Model | Label | Model Selection |
 |---|---|---|
 | Baseline | Original | Original Val<br>Macro F1 |
 | SSR+LSL<br>Teacher | Original | - |
@@ -19,7 +19,7 @@
 - 전체 데이터셋 라벨 교정
 - Student는 Teacher의 교정 라벨로 사전학습 가중치에서 새롭게 학습
 
-## 분류 결과
+## Classification Results
 
 | Model | Test Label | Accuracy | Balanced<br>Accuracy | Macro F1 | Epoch |
 |---|---|---:|---:|---:|---:|
@@ -31,14 +31,14 @@
 
 - Co Student의 모델 선택 기준과 측정값은 별도로 수행한 클라우드 실험에 대해 제공된 정보를 반영.
 
-## 데이터셋
+## Dataset
 
 - 반려동물 피부질환 데이터 ([AI-Hub 원본](https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=561)), **7개 클래스, 46,657개 영상**.
 - Train **32,661개** / Validation **7,002개** / Test **6,994개**.
 
-### 원본 클래스 분포
+### Original Class Distribution
 
-| 코드 | 클래스 | Train | Validation | Test | 전체 |
+| Code | Class | Train | Validation | Test | Total |
 |---|---|---:|---:|---:|---:|
 | A1 | 구진·플라크 | 6,366 | 1,365 | 1,363 | 9,094 |
 | A2 | 비듬·각질·<br>상피성 잔고리 | 6,589 | 1,412 | 1,411 | 9,412 |
@@ -47,23 +47,23 @@
 | A5 | 미란·궤양 | 2,400 | 515 | 514 | 3,429 |
 | A6 | 결절·종괴 | 3,706 | 794 | 794 | 5,294 |
 | A7 | 정상 | 4,656 | 998 | 997 | 6,651 |
-| **전체** | | **32,661** | **7,002** | **6,994** | **46,657** |
+| **Total** | | **32,661** | **7,002** | **6,994** | **46,657** |
 
-### 라벨 변경 수
+### Label Changes
 
-| 분할 | 영상 수 | SSR+LSL<br>변경 수 | 변경률 | Co-Correcting<br>변경 수 | 변경률 |
+| Split | Images | SSR+LSL<br>Changes | SSR+LSL<br>Change Rate | Co-Correcting<br>Changes | Co-Correcting<br>Change Rate |
 |---|---:|---:|---:|---:|---:|
 | Train | 32,661 | 3,786 | 11.59% | 4,588 | 14.05% |
 | Validation | 7,002 | 825 | 11.78% | 1,683 | 24.04% |
 | Test | 6,994 | 802 | 11.47% | 1,746 | 24.96% |
-| **전체** | **46,657** | **5,413** | **11.60%** | **8,017** | **17.18%** |
+| **Total** | **46,657** | **5,413** | **11.60%** | **8,017** | **17.18%** |
 
-### 교정 전후 클래스 분포
+### Class Distribution Changes
 
 - Train·Validation·Test 합산. 괄호는 원본 대비 **클래스별 순증감**.
 - 클래스별 순증감과 라벨이 변경된 영상 수는 서로 다른 집계.
 
-| 클래스 | 원본 | SSR+LSL<br>교정 후 | Co-Correcting<br>교정 후 |
+| Class | Original | SSR+LSL<br>Corrected | Co-Correcting<br>Corrected |
 |---|---:|---:|---:|
 | 구진·플라크 | 9,094 | 8,038 (−1,056) | 9,567 (+473) |
 | 비듬·각질·<br>상피성 잔고리 | 9,412 | 8,729 (−683) | 7,848 (−1,564) |
@@ -72,9 +72,9 @@
 | 미란·궤양 | 3,429 | 3,958 (+529) | 3,853 (+424) |
 | 결절·종괴 | 5,294 | 5,007 (−287) | 4,880 (−414) |
 | 정상 | 6,651 | 6,767 (+116) | 7,581 (+930) |
-| **전체** | **46,657** | **46,657** | **46,657** |
+| **Total** | **46,657** | **46,657** | **46,657** |
 
-## 라벨 신뢰도
+## Label Reliability
 
 | Method | CHI ↑ | Clique Label<br>Entropy ↓ | Data<br>Credibility ↑ |
 |---|---:|---:|---:|
@@ -84,18 +84,18 @@
 
 - Clique Label Entropy: Cosine Similarity threshold `0.74`, 최소 Clique 크기 `11`.
 
-## 주요 설정
+## Hyperparameters
 
-| 항목 | SSR+LSL | Co-Correcting |
+| Parameter | SSR+LSL | Co-Correcting |
 |---|---|---|
-| Teacher epochs | 300 | 200<br>Warmup 10 / Correction 140 / Fine-tuning 50 |
-| Teacher seed | 0 | 두 네트워크 0, 1 |
-| 교정 설정 | k=200, τ=0.7<br>Reverse k=20 | Forget rate=0.1<br>α=0.2, λ=500 |
+| Teacher Epochs | 300 | 200<br>Warmup 10 / Correction 140 / Fine-tuning 50 |
+| Teacher Seed | 0 | 두 네트워크 0, 1 |
+| Correction Settings | k=200, τ=0.7<br>Reverse k=20 | Forget rate=0.1<br>α=0.2, λ=500 |
 | Student / Baseline | 300 epochs, batch 256, WCE | 300 epochs, batch 256, WCE |
 
 - 전체 설정: [SSR](configs/ssr.json), [Co-Correcting](configs/co-correcting.json).
 
-## 코드·결과 구조
+## Project Structure
 
 ```text
 .
