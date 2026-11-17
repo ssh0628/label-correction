@@ -14,7 +14,6 @@
 | SSR+LSL Teacher | SSR+LSL로 학습 | 원본 Val Macro F1 최고 | 원본 |
 | Co-Correcting Teacher | Co-Correcting으로 학습 | Fine-tuning 종료 모델 | 원본 |
 | SSR+LSL Student | SSR 교정 | SSR 교정 Val Macro F1 최고 | SSR 교정 |
-| Co-Correcting Student | Co 교정 | 원본 Val Macro F1 최고 | Co 교정 |
 
 - 학습·검증·테스트 **전체 분할의 라벨을 교정**하고, 영상과 데이터 분할은 유지.
 - Student는 Teacher의 교정 라벨을 고정하고 사전학습 가중치에서 새롭게 학습.
@@ -35,11 +34,18 @@
 | SSR+LSL Teacher | 원본 | 75.3646 | 77.8468 | 76.6055 | 264 |
 | SSR+LSL Student · Multi-ROI + WCE | SSR 교정 | 86.4598 | 87.5680 | 87.7218 | 205 |
 | Co-Correcting Teacher | 원본 | 76.1367 | 78.8594 | 77.5565 | 200 |
-| Co-Correcting Student · Multi-ROI + WCE | Co 교정 | 87.9325 | 87.8881 | 88.2354 | 222 |
 
-- Co Student: 교정 Train으로 학습하고 **원본 Val로 모델을 선택한 뒤 교정 Test로 평가**한 기존 실행 결과.
 - SSR Teacher 27-ROI 수치는 제공된 평가 로그를 반영. 로컬 center 결과·epoch·Val 선택 점수와 대조했으며, 원본 27-ROI 평가 파일은 로컬에 없음.
 - 라벨 생성 모델은 분류 결과의 선택 모델과 구분: **SSR은 Train total loss 최저 epoch 267**, **Co는 correction_end epoch 150**.
+
+### Co Student 참고 측정
+
+| 모델 | Test 라벨 | Accuracy | Balanced Accuracy | Macro F1 | 선택 epoch |
+|---|---|---:|---:|---:|---:|
+| Co-Correcting Student · Multi-ROI + WCE | Co 교정 | 87.9325 | 87.8881 | 88.2354 | 222 |
+
+- 교정 Train으로 학습하고 교정 Test로 평가한 기존 실행의 측정값.
+- SSR Student와 모델 선택 조건이 다른 실행이므로 참고 결과로 구분.
 
 ## 데이터셋
 
@@ -104,7 +110,7 @@
 | Teacher epochs | 300 | 200: Warmup 10 / Correction 140 / Fine-tuning 50 |
 | Teacher seed | 0 | 두 네트워크 0, 1 |
 | 교정 설정 | k=200, τ=0.7, Reverse k=20 | Forget rate=0.1, α=0.2, λ=500 |
-| Student / Baseline | 300 epochs, batch 256, WCE | 공통 Baseline 및 동일 Student 학습 기준 |
+| Student / Baseline | 300 epochs, batch 256, WCE | 300 epochs, batch 256, WCE |
 
 - 전체 설정: [SSR](configs/ssr.json), [Co-Correcting](configs/co-correcting.json).
 
