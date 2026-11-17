@@ -118,7 +118,7 @@
 
 ## References
 
-- **SSR** — [BMVC 2022 논문](https://bmvc2022.mpi-inf.mpg.de/0372.pdf) · [저자 코드](https://github.com/MrChenFeng/SSR_BMVC2022)
+- **SSR** — [BMVC 2022 논문](https://arxiv.org/abs/2111.11288) · [저자 코드](https://github.com/MrChenFeng/SSR_BMVC2022)
 - **LSL** — [CVPR 2024 논문](https://openaccess.thecvf.com/content/CVPR2024/html/Kim_Learning_with_Structural_Labels_for_Learning_with_Noisy_Labels_CVPR_2024_paper.html)
 - **Co-Correcting** — [IEEE TMI 2021 논문](https://doi.org/10.1109/TMI.2021.3091178) · [arXiv](https://arxiv.org/abs/2109.05159) · [저자 코드](https://github.com/JiarunLiu/Co-Correcting)
 - 원 저작권·라이선스: [LICENSE](LICENSE)
