@@ -14,7 +14,7 @@
 | SSR+LSL Teacher | SSR+LSL로 학습 | 원본 Val Macro F1 최고 | 원본 |
 | Co-Correcting Teacher | Co-Correcting으로 학습 | Fine-tuning 종료 모델 | 원본 |
 | SSR+LSL Student | SSR 교정 | SSR 교정 Val Macro F1 최고 | SSR 교정 |
-| Co-Correcting Student | Co 교정 | Co 교정 Val Macro F1 최고 | Co 교정 |
+| Co-Correcting Student | Co 교정 | 원본 Val Macro F1 최고 | Co 교정 |
 
 - 학습·검증·테스트 **전체 분할의 라벨을 교정**하고, 영상과 데이터 분할은 유지.
 - Student는 Teacher의 교정 라벨을 고정하고 사전학습 가중치에서 새롭게 학습.
@@ -35,9 +35,9 @@
 | SSR+LSL Teacher | 원본 | 75.3646 | 77.8468 | 76.6055 | 264 |
 | SSR+LSL Student · Multi-ROI + WCE | SSR 교정 | 86.4598 | 87.5680 | 87.7218 | 205 |
 | Co-Correcting Teacher | 원본 | 76.1367 | 78.8594 | 77.5565 | 200 |
-| Co-Correcting Student · Multi-ROI + WCE | Co 교정 | — | — | — | 재학습 대기 |
+| Co-Correcting Student · Multi-ROI + WCE | Co 교정 | 87.9325 | 87.8881 | 88.2354 | 222 |
 
-- Co Student의 기존 실행은 원본 Val로 모델을 선택했으므로 최종 비교에서 제외. 교정 Val 기준 재학습 결과로 갱신 예정.
+- Co Student: 교정 Train으로 학습하고 **원본 Val로 모델을 선택한 뒤 교정 Test로 평가**한 기존 실행 결과.
 - SSR Teacher 27-ROI 수치는 제공된 평가 로그를 반영. 로컬 center 결과·epoch·Val 선택 점수와 대조했으며, 원본 27-ROI 평가 파일은 로컬에 없음.
 - 라벨 생성 모델은 분류 결과의 선택 모델과 구분: **SSR은 Train total loss 최저 epoch 267**, **Co는 correction_end epoch 150**.
 
@@ -97,57 +97,7 @@
 - CLE: Cosine Similarity threshold `0.74`, 최소 Clique 크기 `11`, Entropy 단위 `bits`.
 - 특징 공간의 라벨 일관성과 추정 신뢰도 지표이며, 전문가 검수로 확인한 정답 정확도를 의미하지 않음.
 
-## 실행
-
-### 준비
-
-```bash
-git clone https://github.com/ssh0628/label-correction.git
-cd label-correction
-python -m pip install -r requirements.txt
-```
-
-- Python **3.10 이상**, PyTorch **2.5 이상**.
-- `configs/ssr.json`, `configs/co-correcting.json`의 데이터 경로를 실행 환경에 맞게 수정.
-- 영상 경로·라벨 NPY, 원본 영상 및 bbox 주석 준비.
-- 사전학습 가중치는 로컬 캐시에 준비. 모델 팩토리는 기본적으로 offline cache 사용.
-
-### 학습·평가
-
-```bash
-# 저장 결과 및 필요한 파일 확인
-python run.py --check-only
-
-# 공통 Baseline
-python run.py baseline
-
-# Teacher 학습 및 원본 Test 평가
-python run.py ssr --stage teacher
-python run.py co --stage teacher
-
-# 교정 라벨 재사용 또는 생성 → Student 학습 → 교정 Test 평가
-python run.py ssr --stage student
-python run.py co --stage student
-
-# 저장 모델만 재평가
-python run.py ssr --stage student --evaluate-only
-python run.py co --stage teacher --evaluate-only
-
-# 전체 데이터의 CHI · CLE · Data Credibility
-python run.py quality
-```
-
-```bash
-nohup python -u run.py co --stage student > co.log 2>&1 &
-tail -f co.log
-```
-
-- `python run.py all`: Baseline → SSR → Co 순차 실행. 완료된 유효 결과는 재사용.
-- `--fresh`: 선택 단계의 기존 결과를 `.archive/`에 보존한 뒤 새로 학습.
-- `--resume`: 동일 설정의 Co `last.pt`에서 이어 학습. SSR은 중단 재개 미지원.
-- 원본 Val 기준 Co Student를 교정 Val 조건으로 이어 학습하는 것은 차단.
-
-### 주요 설정
+## 주요 설정
 
 | 항목 | SSR+LSL | Co-Correcting |
 |---|---|---|
@@ -185,7 +135,7 @@ tail -f co.log
 - 원본·교정 라벨 신뢰도: Baseline 및 Teacher의 `label_quality.json`.
 - 기존 라벨 재사용 시 세 분할의 교정 파일과 Teacher 출처가 모두 일치해야 함.
 - `tests/`, `test/`, `output/`, 데이터·가중치·로그·캐시·보관본은 `.gitignore`로 제외.
-- 결과 표 출처: 로컬 `output/`의 평가 JSON, 교정 보고서, 신뢰도 지표 기록.
+- 결과 표 출처: 로컬 평가 JSON, 교정 보고서, 신뢰도 지표 기록. Co Student는 `.archive/`에 보관한 기존 실행 기록 기준.
 
 ## References
 
