@@ -126,6 +126,6 @@
     "evaluate_27_views": true,
     "evaluation_image_batch_size": 16,
     "evaluation_view_chunk_size": 128,
-    "holdout_threshold": 0.7
+    "holdout_correction_epochs": 30
   }
 }

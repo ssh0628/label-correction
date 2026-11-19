@@ -1,7 +1,7 @@
 """Atomic experiment artifacts with immutable original labels and provenance.
 
 Train corrections are learned label distributions, not a final model's argmax.
-Teacher-inferred Val/Test labels remain separate from the original annotations.
+Val/Test corrections optimize label logits while keeping both teachers frozen.
 """
 
 from __future__ import annotations
@@ -15,9 +15,8 @@ import torch
 from torch import Tensor
 
 from .data import input_config, source_hashes as _source_hashes
-from shared.artifacts import (_json_default, atomic_save_npz as _atomic_npz, atomic_write_json,
+from shared.artifacts import (_json_default, atomic_save_npz as _atomic_npz,
                               file_sha256)
-from shared.data import _corrected_targets
 from .model import teacher_model_weights
 
 
@@ -80,6 +79,22 @@ def _metadata(config, source, origin: str, checkpoint_info: dict | None) -> dict
             "ground_truth_verified": False, "checkpoint": checkpoint_info or {}}
 
 
+def _write_correction(config, source, label_logits, output_path, metadata, **extra_arrays) -> dict:
+    data, output_path = _data(config), Path(output_path)
+    values = _validated_label_logits(source, label_logits, len(data.class_names))
+    probabilities = values.softmax(1)
+    corrected = values.argmax(1)
+    original = torch.as_tensor(source.labels).detach().cpu().long()
+    _atomic_npz(output_path, overwrite=False, paths=np.asarray(source.paths), original_labels=original.numpy(),
+                corrected_labels=corrected.numpy(), label_logits=values.numpy(),
+                soft_labels=probabilities.numpy(), changed_mask=corrected.ne(original).numpy(),
+                confidences=probabilities.max(1).values.numpy(),
+                metadata=np.asarray(json.dumps(metadata, ensure_ascii=False, default=_json_default, allow_nan=False)),
+                **extra_arrays)
+    return {**_summary(original, corrected, data), "artifact": str(output_path.resolve()),
+            "artifact_sha256": file_sha256(output_path), "metadata": metadata}
+
+
 def write_train_correction(
     config, source, label_logits, output_path: Path | str, *,
     checkpoint_info: dict | None = None,
@@ -87,136 +102,161 @@ def write_train_correction(
     """Export the checkpoint's optimized train label logits, without inference."""
     if source.name != "train":
         raise ValueError("Learned label logits can only be exported for the training split.")
-    data, output_path = _data(config), Path(output_path)
-    values = _validated_label_logits(source, label_logits, len(data.class_names))
-    probabilities = values.softmax(1)
-    corrected = values.argmax(1)
-    original = torch.as_tensor(source.labels).detach().cpu().long()
     metadata = _metadata(config, source, "optimized_train_label_logits", checkpoint_info)
-    _atomic_npz(output_path, overwrite=False, paths=np.asarray(source.paths), original_labels=original.numpy(),
-                corrected_labels=corrected.numpy(), label_logits=values.numpy(),
-                soft_labels=probabilities.numpy(), changed_mask=corrected.ne(original).numpy(),
-                confidences=probabilities.max(1).values.numpy(),
-                metadata=np.asarray(json.dumps(metadata, ensure_ascii=False, default=_json_default, allow_nan=False)))
-    return {**_summary(original, corrected, data), "artifact": str(output_path.resolve()),
-            "artifact_sha256": file_sha256(output_path), "metadata": metadata}
+    return _write_correction(config, source, label_logits, output_path, metadata)
 
 
-def write_holdout_reference(
-    config, source, prediction_logits, output_path: Path | str, *,
-    threshold: float = 0.7, checkpoint_info: dict | None = None,
+def holdout_settings(config) -> dict:
+    """Parameters that define label optimization with the frozen teachers."""
+    correction = config.correction
+    return {
+        "epochs": config.pipeline.holdout_correction_epochs,
+        "batch_size": correction.label_lr_reference_batch_size,
+        "alpha": float(correction.alpha), "beta": float(correction.beta),
+        "label_lr": float(correction.label_lr),
+        "label_lr_reference_batch_size": correction.label_lr_reference_batch_size,
+        "scale_label_lr_with_batch": correction.scale_label_lr_with_batch,
+        "initial_label_logit": float(correction.initial_label_logit),
+        "loss_variant": correction.loss_variant,
+        "update_rule": "sum_label_gradients_v1", "teacher_frozen": True,
+        "teacher_view": "fixed_center",
+    }
+
+
+def validate_holdout_metadata(config, metadata: dict) -> None:
+    """Reject prediction-threshold exports and stale optimization settings."""
+    if (not isinstance(metadata, dict) or type(metadata.get("schema_version")) is not int
+            or metadata.get("schema_version") != 2
+            or metadata.get("method") != "co_correcting"
+            or metadata.get("split") not in {"val", "test"}
+            or metadata.get("label_origin") != "frozen_teacher_optimized_label_logits"
+            or metadata.get("ground_truth_verified") is not False
+            or "correction_threshold" in metadata):
+        raise ValueError("Holdout correction requires schema 2 frozen-teacher optimized label logits; "
+                         "legacy teacher prediction references cannot be reused.")
+    settings = metadata.get("holdout_settings")
+    expected = holdout_settings(config)
+    if not isinstance(settings, dict) or settings.keys() != expected.keys():
+        raise ValueError("Holdout correction optimization settings are missing or incompatible.")
+    for key, value in expected.items():
+        if type(settings[key]) is not type(value) or settings[key] != value:
+            raise ValueError(f"Holdout correction optimization setting differs: {key}.")
+
+
+def _validated_teacher_logits(values, count: int, classes: int) -> Tensor:
+    logits = torch.as_tensor(values).detach().cpu()
+    if (logits.shape != (count, 2, classes) or not logits.is_floating_point()
+            or not torch.isfinite(logits).all()):
+        raise ValueError("Holdout teacher_logits must be finite floating point [source_count, 2, num_classes].")
+    return logits.float()
+
+
+def _validated_history(history, epochs: int) -> str:
+    if (not isinstance(history, list) or len(history) != epochs
+            or any(not isinstance(row, dict) or type(row.get("epoch")) is not int
+                   or row["epoch"] != epoch for epoch, row in enumerate(history, 1))):
+        raise ValueError("Holdout correction history must contain one ordered row per optimization epoch.")
+    return json.dumps(history, ensure_ascii=False, default=_json_default, allow_nan=False)
+
+
+def write_holdout_correction(
+    config, source, label_logits, output_path: Path | str, *,
+    checkpoint_info: dict | None = None, teacher_logits=None, history=None,
 ) -> dict:
-    """Export teacher-inferred Val/Test labels without replacing original annotations."""
+    """Export optimized Val/Test distributions without changing original labels."""
     if source.name not in {"val", "test"}:
-        raise ValueError("Inferred holdout references are only defined for val/test.")
-    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
-        raise ValueError("Holdout threshold must be in [0,1].")
-    data, output_path = _data(config), Path(output_path)
-    values = _validated_label_logits(source, prediction_logits, len(data.class_names))
-    probabilities = values.softmax(1)
-    confidence, predictions = probabilities.max(1)
-    original = torch.as_tensor(source.labels).detach().cpu().long()
-    corrected = torch.where(confidence > threshold, predictions, original)
-    metadata = _metadata(config, source, "teacher_prediction_reference", checkpoint_info)
-    metadata.update({"correction_threshold": threshold,
-                     "interpretation": "teacher_agreement_only_not_verified_ground_truth"})
-    _atomic_npz(output_path, overwrite=False, paths=np.asarray(source.paths), original_labels=original.numpy(),
-                corrected_labels=corrected.numpy(), predictions=predictions.numpy(),
-                prediction_logits=values.numpy(), confidences=confidence.numpy(),
-                changed_mask=corrected.ne(original).numpy(),
-                metadata=np.asarray(json.dumps(metadata, ensure_ascii=False, default=_json_default, allow_nan=False)))
-    return {**_summary(original, corrected, data), "artifact": str(output_path.resolve()),
-            "artifact_sha256": file_sha256(output_path), "metadata": metadata}
+        raise ValueError("Holdout corrections are only defined for val/test.")
+    metadata = _metadata(config, source, "frozen_teacher_optimized_label_logits", checkpoint_info)
+    metadata.update(schema_version=2, holdout_settings=holdout_settings(config))
+    arrays = {}
+    if teacher_logits is not None:
+        arrays["teacher_logits"] = _validated_teacher_logits(
+            teacher_logits, len(source.paths), len(_data(config).class_names)).numpy()
+    if history is not None:
+        arrays["history"] = np.asarray(_validated_history(history, metadata["holdout_settings"]["epochs"]))
+    return _write_correction(config, source, label_logits, output_path, metadata, **arrays)
 
 
-def load_train_correction(config, source, path: Path | str) -> tuple[Tensor, dict]:
-    """Validate provenance and learned distributions before using fixed targets."""
-    if source.name != "train":
-        raise ValueError("Only training corrections may supply retraining targets.")
+def _load_correction(config, source, path, *, holdout: bool) -> tuple[Tensor, dict]:
     data, path = _data(config), Path(path)
     before_hash = file_sha256(path)
     required = {"paths", "original_labels", "corrected_labels", "label_logits", "soft_labels",
                 "changed_mask", "metadata"}
+    if holdout:
+        required.add("confidences")
     with np.load(path, allow_pickle=False) as artifact:
         if not required <= set(artifact.files):
-            raise ValueError("Train correction is missing learned distributions or provenance.")
+            raise ValueError("Correction is missing optimized label distributions or provenance.")
         encoded = artifact["metadata"]
         if encoded.shape != () or encoded.dtype.kind != "U":
             raise ValueError("Correction metadata must be scalar Unicode JSON.")
         metadata = json.loads(encoded.item())
         if not isinstance(metadata, dict):
             raise ValueError("Correction metadata must be a JSON object.")
-        expected = _metadata(config, source, "optimized_train_label_logits", None)
-        for key in ("schema_version", "method", "split", "class_names", "label_offset",
-                    "original_label_offset", "source_hashes", "input_config", "label_origin"):
+        origin = "frozen_teacher_optimized_label_logits" if holdout else "optimized_train_label_logits"
+        expected = _metadata(config, source, origin, None)
+        if holdout:
+            validate_holdout_metadata(config, metadata)
+            expected["schema_version"] = 2
+        keys = ("schema_version", "method", "split", "class_names", "label_offset",
+                "original_label_offset", "source_hashes", "input_config", "label_origin")
+        if holdout:
+            keys += ("ground_truth_verified",)
+        for key in keys:
             if metadata.get(key) != expected[key]:
                 raise ValueError(f"Correction provenance mismatch: {key}.")
         if not np.array_equal(artifact["paths"], np.asarray(source.paths)):
-            raise ValueError("Correction paths differ from the ordered, filtered training split.")
+            raise ValueError("Correction paths differ from the ordered, filtered source split.")
         original = torch.as_tensor(source.labels).detach().cpu().long()
         stored_original, corrected = artifact["original_labels"], artifact["corrected_labels"]
         if (stored_original.dtype.kind not in {"i", "u"} or corrected.dtype.kind not in {"i", "u"}
                 or stored_original.shape != (len(original),) or corrected.shape != (len(original),)
                 or not np.array_equal(stored_original, original.numpy())):
-            raise ValueError("Correction original labels differ from the training source.")
+            raise ValueError("Correction original labels differ from the source split.")
         values = _validated_label_logits(source, artifact["label_logits"], len(data.class_names))
         labels = torch.from_numpy(corrected.astype(np.int64, copy=True))
         if not torch.equal(labels, values.argmax(1)):
             raise ValueError("Correction hard targets do not match the learned label logits.")
+        probabilities = values.softmax(1)
         soft = torch.as_tensor(artifact["soft_labels"])
         if (soft.shape != values.shape or not soft.is_floating_point() or not torch.isfinite(soft).all()
-                or not torch.allclose(soft.float(), values.softmax(1), atol=1e-6, rtol=1e-5)):
+                or not torch.allclose(soft.float(), probabilities, atol=1e-6, rtol=1e-5)):
             raise ValueError("Correction probabilities do not match the learned label logits.")
+        if "confidences" in artifact.files:
+            confidence = artifact["confidences"]
+            if (confidence.dtype.kind != "f" or confidence.shape != (len(original),)
+                    or not np.isfinite(confidence).all()
+                    or not torch.allclose(torch.as_tensor(confidence).float(), probabilities.max(1).values,
+                                          atol=1e-6, rtol=1e-5)):
+                raise ValueError("Correction confidences do not match the learned label logits.")
         changed = artifact["changed_mask"]
         if changed.dtype.kind != "b" or not np.array_equal(changed, labels.ne(original).numpy()):
             raise ValueError("Correction changed_mask does not match labels.")
+        if holdout and "teacher_logits" in artifact.files:
+            _validated_teacher_logits(artifact["teacher_logits"], len(original), len(data.class_names))
+        if holdout and "history" in artifact.files:
+            encoded = artifact["history"]
+            if encoded.shape != () or encoded.dtype.kind != "U":
+                raise ValueError("Holdout correction history must be scalar Unicode JSON.")
+            _validated_history(json.loads(encoded.item()), metadata["holdout_settings"]["epochs"])
     if file_sha256(path) != before_hash:
         raise ValueError("Correction artifact changed while being read.")
     return labels, {"source_path": str(path.resolve()), "artifact_sha256": before_hash,
                     "metadata": metadata, **_summary(original, labels, data)}
 
 
+def load_train_correction(config, source, path: Path | str) -> tuple[Tensor, dict]:
+    """Validate provenance and learned distributions before using fixed targets."""
+    if source.name != "train":
+        raise ValueError("Only training corrections may supply retraining targets.")
+    return _load_correction(config, source, path, holdout=False)
+
+
 def load_holdout_correction(config, source, path: Path | str) -> tuple[Tensor, dict]:
-    """Load fixed teacher labels without changing the original Val/Test arrays."""
+    """Validate frozen-teacher label optimization and its fixed Val/Test targets."""
     if source.name not in {"val", "test"}:
         raise ValueError("Holdout corrections require a val or test split.")
-    data, path = _data(config), Path(path)
-    labels, report = _corrected_targets(data, source, path)
-    metadata = report["metadata"]
-    expected = _metadata(config, source, "teacher_prediction_reference", None)
-    for key in ("schema_version", "method", "split", "class_names", "label_offset",
-                "original_label_offset", "source_hashes", "input_config", "label_origin",
-                "ground_truth_verified"):
-        if metadata.get(key) != expected[key]:
-            raise ValueError(f"Holdout correction provenance mismatch: {key}.")
-    threshold = metadata.get("correction_threshold")
-    if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
-            or not np.isfinite(threshold) or not 0 <= threshold <= 1):
-        raise ValueError("Holdout correction threshold must be in [0,1].")
-    original = torch.as_tensor(source.labels).detach().cpu().long()
-    with np.load(path, allow_pickle=False) as artifact:
-        if not {"prediction_logits", "predictions", "confidences", "changed_mask"} <= set(artifact.files):
-            raise ValueError("Holdout correction is missing predictions or confidence provenance.")
-        logits = _validated_label_logits(source, artifact["prediction_logits"], data.num_classes)
-        confidences, predictions = logits.softmax(1).max(1)
-        stored_predictions, stored_confidences = artifact["predictions"], artifact["confidences"]
-        if (stored_predictions.dtype.kind not in {"i", "u"}
-                or stored_predictions.shape != (len(original),)
-                or not np.array_equal(stored_predictions, predictions.numpy())):
-            raise ValueError("Holdout correction predictions do not match teacher logits.")
-        if (stored_confidences.dtype.kind != "f" or stored_confidences.shape != (len(original),)
-                or not np.isfinite(stored_confidences).all()
-                or not torch.allclose(torch.as_tensor(stored_confidences).float(), confidences,
-                                      atol=1e-6, rtol=1e-5)):
-            raise ValueError("Holdout correction confidences do not match teacher logits.")
-        if not torch.equal(labels, torch.where(confidences > threshold, predictions, original)):
-            raise ValueError("Holdout correction labels violate the teacher confidence threshold.")
-        changed = artifact["changed_mask"]
-        if changed.dtype.kind != "b" or not np.array_equal(changed, labels.ne(original).numpy()):
-            raise ValueError("Holdout correction changed_mask does not match labels.")
-    if file_sha256(path) != report["artifact_sha256"]:
-        raise ValueError("Holdout correction artifact changed while being read.")
-    return labels, {**report, "source_path": str(path.resolve()), **_summary(original, labels, data)}
+    return _load_correction(config, source, path, holdout=True)
 
 
 def validate_correction_pair(train: dict, validation: dict) -> str:

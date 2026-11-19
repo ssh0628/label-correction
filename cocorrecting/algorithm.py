@@ -16,6 +16,7 @@ from math import isfinite
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+from tqdm import tqdm
 
 
 def forget_rate_at(epoch: int, target: float, gradual: int) -> float:
@@ -175,3 +176,66 @@ does not implicitly increase its update rate. No model gradient is created.
     if not bool(torch.isfinite(updated).all()):
         raise FloatingPointError("Non-finite corrected label logits; lower label_lr.")
     return updated
+
+
+@torch.no_grad()
+def optimize_holdout_labels(
+    network_logits: Tensor,
+    original_labels: Tensor,
+    config,
+    *,
+    epochs: int = 30,
+    batch_size: int = 256,
+    progress_label: str | None = None,
+) -> tuple[Tensor, list[dict]]:
+    """Extend Co's label update to heldouts, with both Teachers fixed.
+
+    Cache each Teacher's logits once. Every epoch updates label logits only;
+    it does not repeat image inference, train the models or select small-loss
+    samples. Keep the two losses separate until their label gradients are summed.
+    """
+    if any(type(value) is not int or value < 1 for value in (epochs, batch_size)):
+        raise ValueError("Holdout epochs and batch_size must be positive integers.")
+    if (network_logits.ndim != 3 or network_logits.shape[1] != 2
+            or not network_logits.is_floating_point()):
+        raise ValueError("Expected separate Teacher logits [samples, 2, classes].")
+    if not isfinite(config.initial_label_logit) or config.initial_label_logit <= 0:
+        raise ValueError("initial_label_logit must be finite and positive.")
+    # Cloning outside inference_mode also makes cached inference tensors usable
+    # in the label-gradient calculation without creating model gradients.
+    logits = network_logits.detach().float().clone()
+    originals = original_labels.detach().to(logits.device)
+    labels = logits.new_zeros((len(logits), logits.shape[-1]))
+    _validate_logits(logits[:, 0], labels, originals)
+    _validate_logits(logits[:, 1], labels, originals)
+    labels.scatter_(1, originals[:, None], config.initial_label_logit)
+    eligible = torch.ones(len(labels), device=labels.device, dtype=torch.bool)
+
+    def objective():
+        return sum(per_sample_loss(logits[:, index], labels, originals,
+                                   config.alpha, config.beta, config.loss_variant)
+                   for index in range(2)).mean().item()
+
+    history = []
+    loss_before = objective()
+    progress = tqdm(range(epochs), desc=progress_label, disable=progress_label is None,
+                    leave=False, mininterval=5)
+    for epoch in progress:
+        previous = labels.softmax(1)
+        previous_targets = labels.argmax(1)
+        for start in range(0, len(labels), batch_size):
+            rows = slice(start, start + batch_size)
+            labels[rows] = update_label_logits(
+                labels[rows], logits[rows, 0], logits[rows, 1], originals[rows],
+                eligible[rows], config,
+            )
+        targets = labels.argmax(1)
+        loss = objective()
+        row = {"epoch": epoch + 1, "loss_before": loss_before, "loss": loss,
+               "changed_count": targets.ne(originals).sum().item(),
+               "updated_count": targets.ne(previous_targets).sum().item(),
+               "mean_probability_change": (labels.softmax(1) - previous).abs().sum(1).mean().item()}
+        history.append(row)
+        progress.set_postfix(loss=f"{loss:.5f}", changed=row["changed_count"])
+        loss_before = loss
+    return labels.cpu(), history

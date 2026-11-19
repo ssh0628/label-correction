@@ -11,19 +11,19 @@ from tqdm import tqdm
 
 from .algorithm import (forget_rate_at, per_sample_loss,
                         select_small_loss_indices, update_label_logits)
-from .artifacts import (atomic_write_json, dataset_fingerprint, source_hashes,
+from .artifacts import (dataset_fingerprint, source_hashes,
                         validate_teacher_weighting)
 from .curriculum import build_curriculum, eligible_mask
 from .evaluation import evaluate_logits, extract_features, predict_logits
 from .model import build_optimizer, build_teacher_models, teacher_forward, teacher_model_weights
-from .runtime import (atomic_torch_save, comparable_config, configure_runtime,
+from .runtime import (comparable_config, configure_runtime,
                       managed_loader, reconcile_metrics, resolve_device, start_run,
                       seed_everything, set_loader_epoch, teacher_seed_metadata,
                       validate_checkpoint_history, validate_teacher_seed_metadata)
 from .config import to_dict
 from .data import build_data
 from shared.precision import PrecisionPolicy
-from shared.artifacts import JsonlWriter
+from shared.artifacts import JsonlWriter, atomic_torch_save, atomic_write_json
 
 
 def phase_at(epoch, correction):

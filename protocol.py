@@ -10,8 +10,7 @@ from shared.data import correction_checkpoint
 SPLITS = ("train", "val", "test")
 CORRECTION_FILES = {
     "ssr": {split: f"{split}_correction.npz" for split in SPLITS},
-    "co": {"train": "train_correction.npz", "val": "val_prediction_reference.npz",
-           "test": "test_prediction_reference.npz"},
+    "co": {split: f"{split}_correction.npz" for split in SPLITS},
 }
 CORRECTION_MODELS = {"ssr": "best_train_total_loss.pt", "co": "correction_end.pt"}
 EVALUATION_MODELS = {
@@ -40,7 +39,7 @@ def validate_student_selection(directory):
         raise ValueError(f"{directory}: previous Student used original Val. Use --fresh to preserve it and restart.")
 
 
-def validate_cached_student(method, directory, teacher):
+def validate_cached_student(method, directory, teacher, config=None):
     """Newly copied Teacher/label files must agree with a completed Student."""
     summary = read_json(directory / "run_summary.json", {})
     targets = {split: read_json(directory / name, {}) for split, name in
@@ -50,6 +49,7 @@ def validate_cached_student(method, directory, teacher):
     checkpoint = teacher / CORRECTION_MODELS[method]
     if expected_teacher and checkpoint.is_file() and sha256(checkpoint) != expected_teacher:
         raise ValueError("Student source Teacher changed; use --fresh to retrain this Student.")
+    validate_student_selection(directory)
     expected = {split: target.get("artifact_sha256") for split, target in targets.items()}
     expected["train"] = summary.get("corrected_labels_sha256") or expected["train"]
     expected["val"] = (summary.get("corrected_validation_labels_sha256") or expected["val"]
@@ -57,6 +57,27 @@ def validate_cached_student(method, directory, teacher):
     evaluation = read_json(directory / "evaluation.json", {})
     reference = evaluation.get("corrected_references", {}).get(method, {})
     expected["test"] = reference.get("artifact_sha256") or expected["test"]
+    if method == "co":
+        from cocorrecting.artifacts import validate_holdout_metadata
+        if config is None:
+            from cocorrecting.config import load_config
+            path = directory / "config.json"
+            if not path.is_file():
+                raise ValueError("Cached Co Student requires its correction configuration and "
+                                 "frozen-teacher Validation provenance; use --fresh.")
+            config = load_config(path)
+        validation_metadata = targets["val"].get("metadata", {})
+        validate_holdout_metadata(config, validation_metadata)
+        validation_checkpoint = correction_checkpoint(validation_metadata)
+        if (validation_metadata.get("split") != "val" or not expected_teacher
+                or validation_checkpoint["sha256"] != expected_teacher
+                or validation_checkpoint["completed_epochs"] != config.correction.correction_end_epoch
+                or validation_checkpoint["selection"].get("criterion") != "end_of_label_updates"):
+            raise ValueError("Cached Co Student Validation labels use a different Teacher; use --fresh.")
+        if (not expected["val"] or not expected["test"]
+                or not (teacher / "corrections" / CORRECTION_FILES[method]["test"]).is_file()):
+            raise ValueError("Cached Co Student requires matching optimized Validation/Test labels; "
+                             "legacy prediction references cannot be reused. Use --fresh.")
     names = CORRECTION_FILES[method]
     for split, name in names.items():
         path = teacher / "corrections" / name
@@ -64,13 +85,15 @@ def validate_cached_student(method, directory, teacher):
             continue
         if expected[split] and sha256(path) != expected[split]:
             raise ValueError(f"Cached Student {split} labels changed; use --fresh to retrain this Student.")
-        if expected_teacher:
+        if expected_teacher or method == "co":
             import numpy as np
             with np.load(path, allow_pickle=False) as arrays:
                 meta = json.loads(str(arrays["metadata"].item()))
             teacher_hash = correction_checkpoint(meta)["sha256"]
-            if teacher_hash != expected_teacher or meta.get("split") != split:
+            if ((expected_teacher and teacher_hash != expected_teacher) or meta.get("split") != split):
                 raise ValueError(f"Cached Student {split} labels use a different Teacher; use --fresh.")
+            if method == "co" and split in {"val", "test"}:
+                validate_holdout_metadata(config, meta)
 
 
 def training_state(directory, *, corrected, resume=False):
@@ -148,12 +171,14 @@ def validate_export_sources(method, config, paths, checkpoint):
             if (selection.get("criterion") != "end_of_label_updates"
                     or identity[1] != config.correction.correction_end_epoch):
                 raise ValueError("Co labels must come from the correction-end teacher.")
-            threshold = config.pipeline.holdout_threshold
+            if split != "train":
+                from cocorrecting.artifacts import validate_holdout_metadata
+                validate_holdout_metadata(config, metadata)
         if (not isinstance(identity[0], str) or len(identity[0]) != 64
                 or any(character not in "0123456789abcdef" for character in identity[0])
                 or type(identity[1]) is not int or identity[1] < 1):
             raise ValueError(f"Missing Teacher identity in {path}")
-        if (method == "ssr" or split != "train") and metadata.get("correction_threshold") != threshold:
+        if method == "ssr" and metadata.get("correction_threshold") != threshold:
             raise ValueError(f"Correction threshold differs from the saved configuration: {path}")
         identities.append((identity, selection))
     if any(identity != identities[0] for identity in identities[1:]):

@@ -18,8 +18,11 @@
 
 - 전체 데이터셋 라벨 교정
 - Student는 Teacher의 교정 라벨로 사전학습 가중치에서 새롭게 학습
+- Co-Correcting의 검증·테스트 라벨은 Teacher를 고정한 상태에서 두 모델 손실의 라벨 Gradient를 합산하여 최적화
 
 ## Classification Results
+
+아래 Co-Correcting 결과는 기존 확률 기반 검증·테스트 교정 실험의 기록이며, 변경된 라벨 최적화 절차의 결과는 포함하지 않는다.
 
 | Model | Test Label | Accuracy | Balanced<br>Accuracy | Macro F1 | Epoch |
 |---|---|---:|---:|---:|---:|
@@ -91,6 +94,7 @@
 | Teacher Epochs | 300 | 200<br>Warmup 10 / Correction 140 / Fine-tuning 50 |
 | Teacher Seed | 0 | 두 네트워크 0, 1 |
 | Correction Settings | k=200, τ=0.7<br>Reverse k=20 | Forget rate=0.1<br>α=0.2, λ=500 |
+| Validation / Test Label Updates | Confidence-based relabelling | Frozen Teacher<br>30 label-update epochs |
 | Student / Baseline | 300 epochs, batch 256, WCE | 300 epochs, batch 256, WCE |
 
 - 전체 설정: [SSR](configs/ssr.json), [Co-Correcting](configs/co-correcting.json).

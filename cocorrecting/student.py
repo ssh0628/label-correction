@@ -13,18 +13,18 @@ import torch
 from torch.nn import functional as F
 from tqdm import tqdm
 
-from .artifacts import (atomic_write_json, dataset_fingerprint, file_sha256,
+from .artifacts import (dataset_fingerprint, file_sha256,
                         load_holdout_correction, load_train_correction,
                         validate_correction_pair)
 from .evaluation import evaluate_logits, predict_logits
 from .model import build_model, build_optimizer, class_weights
-from .runtime import (atomic_torch_save, comparable_config, configure_runtime,
+from .runtime import (comparable_config, configure_runtime,
                       managed_loader, reconcile_metrics, resolve_device, start_run,
                       seed_everything, set_loader_epoch, validate_checkpoint_history)
 from .config import to_dict
 from .data import build_data
 from shared.precision import PrecisionPolicy
-from shared.artifacts import JsonlWriter
+from shared.artifacts import JsonlWriter, atomic_torch_save, atomic_write_json
 
 
 def train_student(config, run_dir, *, corrected_labels_path=None,

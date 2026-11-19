@@ -9,7 +9,7 @@ import shutil
 from tempfile import TemporaryDirectory
 
 from shared.artifacts import atomic_write_json, read_json, file_sha256 as sha256
-from protocol import (SPLITS, CORRECTION_MODELS, EVALUATION_MODELS, archive, checkpoint_name,
+from protocol import (CORRECTION_MODELS, EVALUATION_MODELS, archive, checkpoint_name,
                       correction_paths, shared_baseline_config, training_state,
                       validate_cached_student, validate_export_sources, validate_student_selection)
 
@@ -25,6 +25,16 @@ def load_config(method, path, device):
     config = replace(config, runtime=replace(config.runtime, device=device))
     if method == "co":
         config = replace(config, pipeline=replace(config.pipeline, evaluate_27_views=True))
+    return config
+
+
+def stage_config(args, method, saved):
+    template = args.co_config if method == "co" else args.ssr_config
+    config = load_config(method, saved if saved.is_file() else template, args.device)
+    if method == "co" and saved.is_file():
+        requested = load_config(method, template, args.device)
+        config = replace(config, pipeline=replace(config.pipeline,
+            holdout_correction_epochs=requested.pipeline.holdout_correction_epochs))
     return config
 
 
@@ -58,6 +68,14 @@ def export_labels(method, config, teacher):
 def evaluate(method, role, directory, config, corrections, *, force=False):
     if role == "student":
         validate_student_selection(directory)
+        if method == "co":
+            from cocorrecting.artifacts import validate_holdout_metadata
+            validation = read_json(directory / "validation_targets.json", {})
+            validate_holdout_metadata(config, validation.get("metadata", {}))
+            if (corrections is not None
+                    and validation.get("artifact_sha256") != sha256(corrections["val"])):
+                raise ValueError("Validation correction changed since model selection; "
+                                 "reselect or retrain the model with the current labels.")
     saved = read_json(directory / "evaluation.json", {})
     expected = "teacher_corrected" if role == "student" else "original"
     if not force and saved.get("status") == "evaluated" and saved.get("primary_metrics") is not None:
@@ -107,8 +125,16 @@ def evaluate(method, role, directory, config, corrections, *, force=False):
 
 def stage(args, method, role):
     """Follow the same prepare → train/reuse → evaluate sequence for every model."""
-    directory = args.output / ("baseline" if method == "baseline" else f"{method}/{role}")
     teacher = args.output / method / "teacher"
+    if role == "correction":
+        config = stage_config(args, method, teacher / "config.json")
+        if args.fresh:
+            checkpoint = teacher / CORRECTION_MODELS[method]
+            if not checkpoint.is_file():
+                raise FileNotFoundError(f"Missing correction weights: {checkpoint}.")
+            archive(teacher / "corrections", args.output)
+        return export_labels(method, config, teacher)
+    directory = args.output / ("baseline" if method == "baseline" else f"{method}/{role}")
     corrected = role == "student"
     if args.fresh:
         archive(directory, args.output)
@@ -117,12 +143,11 @@ def stage(args, method, role):
     state = None if args.evaluate_only else training_state(directory, corrected=corrected,
                                                            resume=args.resume and method == "co")
     source = (teacher if corrected else directory) / "config.json"
-    template = args.co_config if method == "co" else args.ssr_config
-    base = load_config(method, source if source.is_file() else template, args.device)
+    base = stage_config(args, method, source)
     saved = read_json(directory / "evaluation.json", {})
     if state == "completed" and saved.get("status") == "evaluated" and saved.get("primary_metrics") is not None:
         if corrected:
-            validate_cached_student(method, directory, teacher)
+            validate_cached_student(method, directory, teacher, base)
         return evaluate(method, role, directory, base, None)
     corrections = export_labels(method, base, teacher) if corrected else None
     if method == "co":
@@ -158,7 +183,7 @@ def quality(args):
     candidates = {}
     for method in ("ssr", "co"):
         teacher = args.output / method / "teacher"
-        base = load_config(method, teacher / "config.json", args.device)
+        base = stage_config(args, method, teacher / "config.json")
         candidates[method] = export_labels(method, base, teacher)
     reports = run(args.ssr_config, candidates, cache_dir=args.output.parent / ".cache/label_quality",
                   metrics=("ch", "cle", "credibility") if args.metric == "all" else (args.metric,), device=args.device)
@@ -198,7 +223,7 @@ def inventory(output):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("method", nargs="?", choices=("all", "baseline", "ssr", "co", "quality"), default="all")
-    parser.add_argument("--stage", choices=("all", "teacher", "student"), default="all")
+    parser.add_argument("--stage", choices=("all", "teacher", "correction", "student"), default="all")
     parser.add_argument("--output", type=Path, default=ROOT / "output")
     parser.add_argument("--ssr-config", type=Path, default=ROOT / "configs/ssr.json")
     parser.add_argument("--co-config", type=Path, default=ROOT / "configs/co-correcting.json")
@@ -212,13 +237,15 @@ def main(argv=None):
     args.output = args.output.expanduser().resolve()
     if args.fresh and (args.resume or args.evaluate_only):
         parser.error("--fresh cannot be combined with --resume or --evaluate-only.")
+    if args.stage == "correction" and (args.method not in {"all", "ssr", "co"} or args.evaluate_only):
+        parser.error("--stage correction requires SSR/Co and cannot use --evaluate-only.")
     if args.check_only:
         inventory(args.output)
         return
     if args.method == "quality":
         quality(args)
         return
-    if args.method in {"all", "baseline"}:
+    if args.method in {"all", "baseline"} and args.stage != "correction":
         from ssr.pipeline import load_config as ssr_load
         from cocorrecting.config import load_config as co_load
         co = co_load(args.co_config)

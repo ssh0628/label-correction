@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "output" / "co"
 RETIRED_CORRECTION_FIELDS = {"export_checkpoint"}
 RETIRED_PIPELINE_FIELDS = {"baseline_run_dir", "student_label_wave", "label_wave_window",
-                           "label_wave_patience", "export_holdout_predictions"}
+                           "label_wave_patience", "export_holdout_predictions", "holdout_threshold"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +99,7 @@ class PipelineConfig:
     evaluate_27_views: bool = True
     evaluation_image_batch_size: int = 16
     evaluation_view_chunk_size: int = 128
-    holdout_threshold: float = 0.7
+    holdout_correction_epochs: int = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +133,8 @@ class ExperimentConfig:
         t, c, p = self.training, self.correction, self.pipeline
         positive_ints = (c.num_gradual, c.correction_end_epoch, c.label_lr_reference_batch_size,
                         c.curriculum_groups, c.pca_dimensions, c.curriculum_chunk_size,
-                        p.student_epochs, p.student_batch_size, p.evaluation_image_batch_size, p.evaluation_view_chunk_size)
+                        p.student_epochs, p.student_batch_size, p.evaluation_image_batch_size,
+                        p.evaluation_view_chunk_size, p.holdout_correction_epochs)
         if any(type(v) is not int or v < 1 for v in positive_ints):
             raise ValueError("Epochs, batch sizes, schedule lengths and chunk sizes must be positive integers.")
         if type(c.warmup_epochs) is not int or c.warmup_epochs < 0:
@@ -161,8 +162,6 @@ class ExperimentConfig:
             raise ValueError("forget_rate must be in [0, 1).")
         if not isfinite(c.density_percentile) or not 0 < c.density_percentile < 100:
             raise ValueError("density_percentile must lie strictly between 0 and 100.")
-        if not 0 <= p.holdout_threshold <= 1 or not isfinite(p.holdout_threshold):
-            raise ValueError("holdout_threshold must be in [0,1].")
         if not self.model.name or not 0 <= self.model.drop_path_rate < 1:
             raise ValueError("Invalid model name/drop_path_rate.")
         # Initialization files are needed only by a fresh pretrained model.

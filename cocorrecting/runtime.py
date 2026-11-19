@@ -11,7 +11,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler
 
-from shared.artifacts import atomic_torch_save
 from shared.runtime import close_loader
 
 
@@ -27,8 +26,10 @@ def comparable_config(payload: dict) -> dict:
                                 if key not in RETIRED_CORRECTION_FIELDS}
     if isinstance(result.get("pipeline"), dict):
         from .config import RETIRED_PIPELINE_FIELDS
+        # Heldout label optimization does not change model training. Corrected
+        # retraining separately binds the exact Validation artifact by hash.
         result["pipeline"] = {key: value for key, value in result["pipeline"].items()
-                              if key not in RETIRED_PIPELINE_FIELDS}
+                              if key not in RETIRED_PIPELINE_FIELDS | {"holdout_correction_epochs"}}
     return result
 
 

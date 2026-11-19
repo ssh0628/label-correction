@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import fields
 from pathlib import Path
+import random
 
 import numpy as np
 from contextlib import contextmanager
@@ -19,9 +20,10 @@ from torch import Tensor, nn
 
 from shared.metrics import metrics_from_logits
 from shared.precision import full_precision
-from .artifacts import (_atomic_npz, atomic_write_json, dataset_fingerprint, file_sha256,
-                        load_holdout_correction, validate_teacher_weighting)
-from .config import ModelConfig
+from shared.artifacts import atomic_save_npz as _atomic_npz, atomic_write_json, file_sha256
+from .artifacts import (dataset_fingerprint,
+                        holdout_settings, load_holdout_correction, validate_teacher_weighting)
+from .config import ModelConfig, from_dict
 from .data import build_data, build_fixed_views_dataset
 from .model import build_model
 from .runtime import (configure_runtime, load_checkpoint, managed_loader, resolve_device,
@@ -29,13 +31,19 @@ from .runtime import (configure_runtime, load_checkpoint, managed_loader, resolv
 
 
 @contextmanager
-def _evaluation_mode(models: Sequence[nn.Module]):
+def _evaluation_mode(models: Sequence[nn.Module], device: torch.device):
     flags = [(module, module.training) for model in models for module in model.modules()]
+    python_state, numpy_state = random.getstate(), np.random.get_state()
+    cuda_devices = ([torch.cuda.current_device() if device.index is None else device.index]
+                    if device.type == "cuda" else [])
     try:
-        for model in models:
-            model.eval()
-        yield
+        with torch.random.fork_rng(devices=cuda_devices):
+            for model in models:
+                model.eval()
+            yield
     finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
         for module, was_training in flags:
             module.training = was_training
 
@@ -69,13 +77,15 @@ def _to_device(images: Tensor, device: torch.device, channels_last: bool) -> Ten
                      memory_format=torch.channels_last if channels_last else torch.contiguous_format)
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def predict_logits(
     models: Sequence[nn.Module] | nn.Module, loader, device: torch.device | str, *,
     channels_last: bool = False, view_chunk_size: int = 128, progress_label: str | None = None,
+    per_model: bool = False,
 ) -> Tensor:
-    """Return CPU [N,C] logits in original dataset order; reject partial loaders.
+    """Return CPU logits in dataset order, averaging each model's ROI views.
 
+    Default [N,C] outputs also average models; ``per_model`` returns [N,M,C].
     A batch is ``(images, indices)`` with images [B,C,H,W] or [B,V,C,H,W].
     Shuffled complete loaders are allowed because indices are checked and used.
     """
@@ -86,7 +96,7 @@ def predict_logits(
     if total < 1:
         raise ValueError("Evaluation dataset is empty.")
     seen, results = torch.zeros(total, dtype=torch.bool), None
-    with _evaluation_mode(models), full_precision(device):
+    with _evaluation_mode(models, device), full_precision(device):
         batches = tqdm(loader, desc=progress_label, leave=False, disable=progress_label is None, mininterval=5)
         for images, raw_indices in batches:
             if not isinstance(images, Tensor) or images.ndim not in (4, 5) or not len(images):
@@ -100,7 +110,7 @@ def predict_logits(
             view_logits = None
             for start in range(0, len(flat), view_chunk_size):
                 inputs = _to_device(flat[start:start + view_chunk_size], device, channels_last)
-                summed = None
+                outputs = []
                 for model in models:
                     logits = model(inputs)
                     if (not isinstance(logits, Tensor) or logits.ndim != 2
@@ -108,19 +118,21 @@ def predict_logits(
                             or not logits.is_floating_point() or not torch.isfinite(logits).all()):
                         raise ValueError("Models must return finite floating point [batch, classes] logits.")
                     logits = logits.float()
-                    if summed is not None and summed.shape != logits.shape:
+                    if outputs and outputs[0].shape != logits.shape:
                         raise ValueError("Teacher networks have different output class counts.")
-                    summed = logits if summed is None else summed + logits
-                averaged = (summed / len(models)).cpu()
+                    outputs.append(logits)
+                chunk_logits = torch.stack(outputs, dim=1).cpu()
                 if view_logits is None:
-                    view_logits = torch.empty((len(flat), averaged.shape[1]), dtype=torch.float32)
-                elif view_logits.shape[1] != averaged.shape[1]:
+                    view_logits = torch.empty((len(flat), *chunk_logits.shape[1:]), dtype=torch.float32)
+                elif view_logits.shape[1:] != chunk_logits.shape[1:]:
                     raise ValueError("Model output class count changed across chunks.")
-                view_logits[start:start + len(inputs)] = averaged
-            sample_logits = view_logits.reshape(batch, views, -1).mean(1)
+                view_logits[start:start + len(inputs)] = chunk_logits
+            sample_logits = view_logits.reshape(batch, views, len(models), -1).mean(1)
+            if not per_model:
+                sample_logits = sample_logits.mean(1)
             if results is None:
-                results = torch.empty((total, sample_logits.shape[1]), dtype=torch.float32)
-            elif results.shape[1] != sample_logits.shape[1]:
+                results = torch.empty((total, *sample_logits.shape[1:]), dtype=torch.float32)
+            elif results.shape[1:] != sample_logits.shape[1:]:
                 raise ValueError("Model output class count changed between batches.")
             results[indices] = sample_logits
     if results is None or not seen.all():
@@ -139,7 +151,7 @@ def extract_features(
     if total < 1:
         raise ValueError("Feature dataset is empty.")
     seen, results = torch.zeros(total, dtype=torch.bool), None
-    with _evaluation_mode(models), full_precision(device):
+    with _evaluation_mode(models, device), full_precision(device):
         for images, raw_indices in loader:
             if not isinstance(images, Tensor) or images.ndim != 4 or not len(images):
                 raise ValueError("Curriculum features require fixed-center [B,C,H,W] images.")
@@ -216,12 +228,22 @@ def _load_model(state: dict, config, prepared, device):
     return (tuple(models) if kind == "teacher" else models[0]), kind
 
 
-def _primary_test_reference(state, reference_teacher_hashes):
+def _primary_test_reference(state, reference_teacher_hashes, config):
     """Choose the matching corrected Test reference for a corrected-Val Student."""
     selection_reference = state.get("selection_label_reference",
                                     state.get("selection", {}).get("label_reference", "original"))
     if state.get("kind") != "student" or selection_reference != "teacher_corrected":
         return "original", "original_test"
+    saved = state.get("config", {})
+    pipeline = saved.get("pipeline", {}) if isinstance(saved, dict) else {}
+    if not isinstance(pipeline, dict) or "holdout_correction_epochs" not in pipeline:
+        raise ValueError("Corrected-Val checkpoint lacks frozen-teacher label optimization settings; "
+                         "legacy threshold-selected models cannot be reused.")
+    saved_settings = holdout_settings(from_dict(saved, validate=False))
+    current_settings = holdout_settings(config)
+    if any(type(saved_settings[key]) is not type(value) or saved_settings[key] != value
+           for key, value in current_settings.items()):
+        raise ValueError("Corrected-Val checkpoint holdout optimization settings differ from the current config.")
     teacher_hash = state.get("correction_checkpoint_sha256")
     matching = [name for name, digest in reference_teacher_hashes.items()
                 if teacher_hash is not None and digest == teacher_hash]
@@ -261,7 +283,7 @@ def evaluate_checkpoint(
     state = load_checkpoint(checkpoint_path)
     primary_label_reference, primary_reference = _primary_test_reference(
         state, {name: provenance.get("metadata", {}).get("checkpoint", {}).get("sha256")
-                for name, (_, provenance) in references.items()})
+                for name, (_, provenance) in references.items()}, config)
     device = resolve_device(config.runtime.device)
     configure_runtime(config, device)
     model, kind = _load_model(state, config, prepared, device)
