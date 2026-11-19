@@ -20,9 +20,7 @@
 - Student는 Teacher의 교정 라벨로 사전학습 가중치에서 새롭게 학습
 - Co-Correcting의 검증·테스트 라벨은 Teacher를 고정한 상태에서 두 모델 손실의 라벨 Gradient를 합산하여 최적화
 
-## Classification Results
-
-아래 Co-Correcting 결과는 기존 확률 기반 검증·테스트 교정 실험의 기록이며, 변경된 라벨 최적화 절차의 결과는 포함하지 않는다.
+## Classification Results ([Experiment Code](https://github.com/ssh0628/label-correction/tree/e203188c5f6511a6c0833358edabd93781a975fd))
 
 | Model | Test Label | Accuracy | Balanced<br>Accuracy | Macro F1 | Epoch |
 |---|---|---:|---:|---:|---:|
@@ -31,8 +29,6 @@
 | Co-Correcting<br>Teacher | Original | 76.1367 | 78.8594 | 77.5565 | 200 |
 | SSR+LSL<br>Student | Corrected<br>(SSR+LSL) | 86.4598 | 87.5680 | 87.7218 | 205 |
 | Co-Correcting<br>Student | Corrected<br>(Co-Correcting) | 87.9325 | 87.8881 | 88.2354 | 222 |
-
-- Co Student의 모델 선택 기준과 측정값은 별도로 수행한 클라우드 실험에 대해 제공된 정보를 반영.
 
 ## Dataset
 
